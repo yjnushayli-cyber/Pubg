@@ -32,6 +32,18 @@ jobs:
               renderCount = MIN(renderCount, _nameData.count);
               for (NSUInteger i = 0; i < renderCount; i++) {""")
           p.write_text(s)
+          p = Path("source/Lvzb.mm")
+          s = p.read_text()
+          fixes = {
+              "bool Visible [15];": "bool Visible [15] = {};",
+              "FTransform result;": "FTransform result = {};",
+              "Vector result;": "Vector result = {};",
+              "#pragma mark - public": "static Vector GetBoneWithRotation(const long mesh, int id);\n#pragma mark - public",
+          }
+          for before, after in fixes.items():
+              assert s.count(before) == 1, before
+              s = s.replace(before, after)
+          p.write_text(s)
       - name: Compile syntax against iPhone SDK
         shell: bash
         run: |
@@ -41,7 +53,9 @@ jobs:
           failed=0
           while IFS= read -r file; do
             name="$(basename "$file")"
-            if ! xcrun --sdk iphoneos clang -fsyntax-only -target arm64-apple-ios15.0 -isysroot "$sdk" -fobjc-arc -Isource -Isource/esp "$file" > "diagnostics/$name.log" 2>&1; then
+            flags=()
+            if [[ "$file" == *.mm ]]; then flags+=(-std=c++11); fi
+            if ! xcrun --sdk iphoneos clang -fsyntax-only -target arm64-apple-ios15.0 -isysroot "$sdk" -fobjc-arc "${flags[@]}" -Isource -Isource/esp "$file" > "diagnostics/$name.log" 2>&1; then
               failed=1
             fi
           done < <(find source -type f \( -name '*.mm' -o -name '*.m' \))
