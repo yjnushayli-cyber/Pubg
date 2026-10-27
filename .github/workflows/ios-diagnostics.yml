@@ -1,0 +1,59 @@
+name: iOS source compile diagnostics
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compile-check:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Fetch pinned upstream source
+        run: |
+          git clone https://github.com/x2niosvn/iOS-Pubg-ESP-Project.git source
+          git -C source checkout --detach c25e78c3a0de9b95bf07b7f7dfff36c4dc6ab9f9
+      - name: Apply bounds corrections
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path("source/Lvhuizhi.mm")
+          s = p.read_text()
+          assert s.count("static InfoView *infoView[35];") == 1
+          s = s.replace("static InfoView *infoView[35];", "static const NSInteger kInfoViewCapacity = 100;\nstatic InfoView *infoView[kInfoViewCapacity];")
+          s = s.replace("i < 100; i++", "i < kInfoViewCapacity; i++")
+          needle = "for (NSInteger i = 0; i < _rects.count; i++) {"
+          assert s.count(needle) == 1
+          s = s.replace(needle, """NSUInteger renderCount = MIN(_rects.count, (NSUInteger)kInfoViewCapacity);
+              renderCount = MIN(renderCount, _hpData.count);
+              renderCount = MIN(renderCount, _disData.count);
+              renderCount = MIN(renderCount, _aiData.count);
+              renderCount = MIN(renderCount, _nameData.count);
+              for (NSUInteger i = 0; i < renderCount; i++) {""")
+          p.write_text(s)
+      - name: Compile syntax against iPhone SDK
+        shell: bash
+        run: |
+          mkdir -p diagnostics
+          xcodebuild -version > diagnostics/toolchain.txt
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          failed=0
+          while IFS= read -r file; do
+            name="$(basename "$file")"
+            if ! xcrun --sdk iphoneos clang -fsyntax-only -target arm64-apple-ios15.0 -isysroot "$sdk" -fobjc-arc -Isource -Isource/esp "$file" > "diagnostics/$name.log" 2>&1; then
+              failed=1
+            fi
+          done < <(find source -type f \( -name '*.mm' -o -name '*.m' \))
+          cat diagnostics/*.log
+          echo "Syntax diagnostics only; no linking, signing, IPA, or device validation." >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"
+      - name: Preserve diagnostics and patched source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-compile-diagnostics
+          path: |
+            diagnostics/
+            source/
+          retention-days: 7
